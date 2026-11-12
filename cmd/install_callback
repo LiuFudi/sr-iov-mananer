@@ -1,0 +1,57 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+#
+# install_callback —— 安装文件写入后：生成默认配置，并接管旧版命令行工具留下的
+# systemd 服务，避免两套机制同时创建 VF。
+set -u
+
+APPNAME="sriov-vfctl"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APPDEST="${TRIM_APPDEST:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PKGETC="${TRIM_PKGETC:-${APPDEST}/etc}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+LOG_FILE="${PKGVAR}/info.log"
+
+mkdir -p "$PKGETC" "$PKGVAR" 2>/dev/null
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE" 2>/dev/null
+}
+
+if [ ! -f "$PKGETC/config.json" ]; then
+    printf '{\n  "count": 1\n}\n' > "$PKGETC/config.json"
+    log_msg "创建默认配置：开机创建 1 个 VF"
+fi
+
+UNIT="/etc/systemd/system/i915-sriov-vfs.service"
+HOOK="/usr/local/sbin/i915-sriov-vfs.sh"
+OLDCLI="/usr/local/sbin/sriov-vfctl"
+MODPROBE_CONF="/etc/modprobe.d/sriov-vfctl.conf"
+
+# DKMS 版 i915 的 max_vfs 默认可能为 0；持久化参数，确保重启后 SR-IOV 仍可激活。
+if [ ! -f "$MODPROBE_CONF" ] || grep -q "Managed by sriov-vfctl" "$MODPROBE_CONF" 2>/dev/null; then
+    mkdir -p /etc/modprobe.d 2>/dev/null
+    printf '# Managed by sriov-vfctl\noptions i915 max_vfs=7\n' > "$MODPROBE_CONF"
+    log_msg "已写入 i915 模块参数：max_vfs=7（$MODPROBE_CONF）"
+else
+    log_msg "保留已有模块配置文件：$MODPROBE_CONF"
+fi
+
+if [ -f "$UNIT" ] && grep -q "i915-sriov-vfs.sh" "$UNIT" 2>/dev/null; then
+    systemctl disable --now i915-sriov-vfs.service >/dev/null 2>&1 || true
+    rm -f "$UNIT"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    log_msg "已接管旧版 systemd 服务（$UNIT），VF 创建改由本应用负责"
+fi
+if [ -f "$HOOK" ] && grep -q "I915_SRIOV_VFS" "$HOOK" 2>/dev/null; then
+    rm -f "$HOOK"
+    log_msg "已移除旧版开机 hook（$HOOK）"
+fi
+if [ -f "$OLDCLI" ] && grep -q "Intel i915 SR-IOV" "$OLDCLI" 2>/dev/null; then
+    rm -f "$OLDCLI"
+    log_msg "已移除旧版命令行工具（$OLDCLI），请改用本应用内的命令行"
+fi
+
+log_msg "安装完成"
+exit 0

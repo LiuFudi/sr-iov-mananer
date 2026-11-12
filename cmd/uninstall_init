@@ -1,0 +1,12 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+#
+# uninstall_init —— 卸载前：停掉守护进程（此时文件还在，是清理的最后机会）。
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -x "$SCRIPT_DIR/main" ]; then
+    "$SCRIPT_DIR/main" stop >/dev/null 2>&1 || true
+fi
+exit 0

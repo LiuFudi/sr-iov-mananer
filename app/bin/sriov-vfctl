@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+# 作者主页: https://github.com/LiuFudi
+#
+# sriov-vfctl —— fnOS 应用 sriov-vfctl 的命令行入口。
+# 与 Web 界面共用同一份配置（etc/config.json）与核心逻辑（server/sriovlib.py）。
+
+import argparse
+import os
+import sys
+
+APPNAME = "sriov-vfctl"
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "server"))
+import sriovlib  # noqa: E402
+
+
+def config_path():
+    env = os.environ.get("TRIM_PKGETC")
+    if env:
+        return os.path.join(env, "config.json")
+    for cand in (
+        "/var/apps/%s/etc/config.json" % APPNAME,
+        os.path.join(os.path.dirname(os.path.dirname(HERE)), "etc", "config.json"),
+    ):
+        if os.path.isdir(os.path.dirname(cand)):
+            return cand
+    return "/tmp/%s-config.json" % APPNAME
+
+
+def cmd_status(_args):
+    cfg = sriovlib.load_config(config_path())
+    st = sriovlib.decorate_vm_labels(sriovlib.status(), cfg)
+    print("== 版本 ==")
+    print("  %s" % st["version"])
+    print()
+    print("== 平台 ==")
+    print("  内核        : %s" % st["kernel"])
+    print("  核显        : %s" % st["gpu"])
+    print("  i915 驱动   : %s" % st["driver"]["label"])
+    if st["driver"]["version"]:
+        print("  驱动版本    : %s" % st["driver"]["version"])
+    print("  max_vfs     : %s" % st["driver"]["max_vfs"])
+    print("  SR-IOV      : totalvfs=%d  numvfs=%d" % (st["totalvfs"], st["numvfs"]))
+    print()
+    print("== VF ==")
+    if not st["vfs"]:
+        print("  （没有 VF）")
+    for v in st["vfs"]:
+        print("  %-10s 驱动=%-9s iommu_group=%s" % (v["short"], v["driver"] or "-", v["iommu_group"] or "-"))
+    print()
+    print("== 虚拟机 ==")
+    if not st["vms"]:
+        print("  （没有运行中的虚拟机，或需要 root）")
+    for vm, bdfs in st["vms"].items():
+        label = st.get("vm_labels", {}).get(vm, vm)
+        shown = label if label == vm else "%s (%s)" % (label, vm)
+        print("  %-12s : %s" % (shown, ", ".join(b.replace("0000:", "") for b in bdfs) or "无直通设备"))
+    if st["vfs_in_use"]:
+        print()
+        print("  占用中的 VF:")
+        for u in st["vfs_in_use"]:
+            print("    - %s 正被虚拟机 %s 使用" % (u["short"], u.get("vm_label") or u["vm"]))
+    print()
+    print("  开机数量    : %d" % cfg.get("count", 1))
+
+
+def cmd_set(args):
+    ok, message = sriovlib.set_count(args.count, allow_in_use=args.force)
+    print(message)
+    if not ok:
+        return 1
+    cfg = sriovlib.load_config(config_path())
+    cfg["count"] = args.count
+    sriovlib.save_config(config_path(), cfg)
+    if not args.no_persist:
+        print("已同步开机自动创建数量为 %d" % args.count)
+    return 0
+
+
+def cmd_persist(args):
+    cfg = sriovlib.load_config(config_path())
+    cfg["count"] = args.count
+    sriovlib.save_config(config_path(), cfg)
+    print("已设置开机自动创建 %d 个 VF" % args.count)
+    return 0
+
+
+def cmd_inject(args):
+    if args.dry_run:
+        st = sriovlib.status()
+        print("目标内核：%s" % st["kernel"])
+        print("DKMS 模块：%s" % (st["dkms_module"] or "缺失"))
+        print("当前驱动：%s" % st["driver"]["label"])
+        print("（--dry-run，未执行）")
+        return 0
+    ok, log = sriovlib.inject(config_path=config_path())
+    for line in log:
+        print(line)
+    return 0 if ok else 1
+
+
+def cmd_vms(_args):
+    vms = sriovlib.vm_hostdevs()
+    if not vms:
+        print("没有运行中的虚拟机（或需要 root）")
+        return 0
+    for vm, bdfs in vms.items():
+        print("%s: %s" % (vm, ", ".join(b.replace("0000:", "") for b in bdfs) or "无直通设备"))
+    return 0
+
+
+def cmd_doctor(_args):
+    import os as _os
+    problems = []
+    st = sriovlib.status()
+    if not st["pf_present"]:
+        problems.append("找不到核显 %s" % sriovlib.PF_BDF)
+    if st["driver"]["kind"] != "dkms":
+        problems.append("当前 i915 不是 DKMS 版 -> 运行: sriov-vfctl inject")
+    if not st["dkms_module"]:
+        problems.append("当前内核缺少 i915-sriov-dkms 模块 -> 先安装匹配内核的驱动")
+    if st["vfs_in_use"]:
+        print("提示: VF 正被虚拟机使用（正常现象；改数量前需关闭对应虚拟机）")
+    if problems:
+        print("发现 %d 个问题:" % len(problems))
+        for p in problems:
+            print("  - " + p)
+        return 1
+    print("检查项全部通过。")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="sriov-vfctl", description="Intel i915 SR-IOV 核显 VF 管理器")
+    ap.add_argument("--version", action="version", version="%(prog)s " + sriovlib.VERSION)
+    sub = ap.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("status", help="查看状态")
+    p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("set", help="设置 VF 数量（立即生效并同步开机数量）")
+    p.add_argument("count", type=int)
+    p.add_argument("--no-persist", action="store_true", help="只改当前，不改开机数量")
+    p.add_argument("--force", action="store_true", help="VF 被虚拟机占用时也强行改（危险）")
+    p.set_defaults(func=cmd_set)
+
+    p = sub.add_parser("persist", help="只设置开机自动创建的数量")
+    p.add_argument("count", type=int)
+    p.set_defaults(func=cmd_persist)
+
+    p = sub.add_parser("inject", help="注入/热切换 DKMS 版 i915 并重建 VF")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_inject)
+
+    p = sub.add_parser("vms", help="列出运行中虚拟机的直通设备")
+    p.set_defaults(func=cmd_vms)
+
+    p = sub.add_parser("doctor", help="体检（只读）")
+    p.set_defaults(func=cmd_doctor)
+
+    args = ap.parse_args()
+    if not args.cmd:
+        ap.print_help()
+        return 0
+    return args.func(args) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

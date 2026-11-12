@@ -1,0 +1,20 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+#
+# uninstall_callback —— 卸载清理后：只清运行期残留，不删 etc/（用户配置）。
+# 注意：升级也会先走一遍卸载流程，所以这里绝不能删除用户数据。
+set -u
+
+APPNAME="sriov-vfctl"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APPDEST="${TRIM_APPDEST:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+
+rm -f "${APPDEST}/app.sock" 2>/dev/null
+rm -f "${PKGVAR}/app.pid" 2>/dev/null
+MODPROBE_CONF="/etc/modprobe.d/sriov-vfctl.conf"
+if [ -f "$MODPROBE_CONF" ] && grep -q "Managed by sriov-vfctl" "$MODPROBE_CONF" 2>/dev/null; then
+    rm -f "$MODPROBE_CONF"
+fi
+exit 0

@@ -1,0 +1,5 @@
+dist/
+*.fpk
+__pycache__/
+*.py[cod]
+.vscode/

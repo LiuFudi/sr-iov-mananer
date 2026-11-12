@@ -1,0 +1,30 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+#
+# upgrade_callback —— 升级后：仅当配置丢失时才从备份恢复（绝不覆盖用户新配置）。
+set -u
+
+APPNAME="sriov-vfctl"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APPDEST="${TRIM_APPDEST:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PKGETC="${TRIM_PKGETC:-${APPDEST}/etc}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+LOG_FILE="${PKGVAR}/info.log"
+
+mkdir -p "$PKGETC" 2>/dev/null
+if [ ! -f "$PKGETC/config.json" ] && [ -f "$PKGVAR/config.backup.json" ]; then
+    cp -f "$PKGVAR/config.backup.json" "$PKGETC/config.json" 2>/dev/null
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - 已恢复升级前的配置" >> "$LOG_FILE" 2>/dev/null
+fi
+if [ ! -f "$PKGETC/config.json" ]; then
+    printf '{\n  "count": 1\n}\n' > "$PKGETC/config.json"
+fi
+
+MODPROBE_CONF="/etc/modprobe.d/sriov-vfctl.conf"
+if [ ! -f "$MODPROBE_CONF" ] || grep -q "Managed by sriov-vfctl" "$MODPROBE_CONF" 2>/dev/null; then
+    mkdir -p /etc/modprobe.d 2>/dev/null
+    printf '# Managed by sriov-vfctl\noptions i915 max_vfs=7\n' > "$MODPROBE_CONF"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - 已同步 i915 max_vfs=7 模块参数" >> "$LOG_FILE" 2>/dev/null
+fi
+exit 0

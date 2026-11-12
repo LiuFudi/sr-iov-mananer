@@ -1,0 +1,172 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+# 作者主页: https://github.com/LiuFudi
+#
+# sriov-vfctl 生命周期脚本：start / stop / status
+#
+# 环境变量由 fnOS 应用中心提供：
+#   TRIM_APPDEST  已安装的应用文件（target/）
+#   TRIM_PKGETC   持久配置（etc/）
+#   TRIM_PKGVAR   运行数据（var/）
+set -u
+
+APPNAME="sriov-vfctl"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APPDEST="${TRIM_APPDEST:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+PKGETC="${TRIM_PKGETC:-${APPDEST}/etc}"
+
+LOG_FILE="${PKGVAR}/info.log"
+PID_FILE="${PKGVAR}/app.pid"
+SOCKET="${APPDEST}/app.sock"
+DAEMON="${APPDEST}/server/sriovd.py"
+WORKER="${APPDEST}/server/hw_worker.py"
+PYTHON="$(command -v python3 || echo /usr/bin/python3)"
+
+# GATEWAY_* 是通用名，必须校验归属，避免开发机上串台
+case "${GATEWAY_PREFIX:-}" in
+    /app/sriov-vfctl*) PREFIX="$GATEWAY_PREFIX" ;;
+    *)                 PREFIX="/app/sriov-vfctl" ;;
+esac
+
+mkdir -p "$PKGVAR" 2>/dev/null
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE" 2>/dev/null
+}
+
+# PID 文件会跨重启残留，内核会复用 PID —— 只 kill -0 会把别人的进程当成自己的。
+check_process() {
+    local pid="${1:-}"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$DAEMON"
+}
+
+leftover_pids() {
+    {
+        pgrep -f -- "$DAEMON" 2>/dev/null
+        pgrep -f -- "$WORKER" 2>/dev/null
+    } | sort -u
+}
+
+running_pid() {
+    [ -r "$PID_FILE" ] || return 1
+    local pid
+    pid="$(head -n 1 "$PID_FILE" 2>/dev/null | tr -d '[:space:]')"
+    if check_process "$pid"; then
+        printf '%s' "$pid"
+        return 0
+    fi
+    [ -n "$pid" ] && log_msg "清理陈旧 PID 文件：$pid 不是本应用进程"
+    rm -f "$PID_FILE"
+    return 1
+}
+
+# 运行 = 进程在 + socket 在（否则网关会 502）
+status() {
+    running_pid >/dev/null 2>&1 || return 1
+    [ -S "$SOCKET" ]
+}
+
+start_process() {
+    if status; then
+        log_msg "已在运行（pid $(running_pid)）"
+        return 0
+    fi
+    local stray
+    for stray in $(leftover_pids); do
+        log_msg "启动前清理游离守护进程 $stray"
+        kill -TERM "$stray" 2>/dev/null
+    done
+    sleep 1
+
+    if [ ! -r "$DAEMON" ]; then
+        log_msg "ERROR: 找不到 $DAEMON"
+        echo "$APPNAME: 守护进程缺失（$DAEMON）" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+        return 1
+    fi
+    if [ ! -x "$PYTHON" ]; then
+        log_msg "ERROR: 找不到 python3"
+        echo "$APPNAME: 需要 python3，但系统中没有" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+        return 1
+    fi
+
+    rm -f "$SOCKET" 2>/dev/null
+    setsid "$PYTHON" "$DAEMON" \
+        --appdest "$APPDEST" \
+        --etc "$PKGETC" \
+        --var "$PKGVAR" \
+        --ui "$APPDEST/ui" \
+        --socket "$SOCKET" \
+        --gateway-prefix "$PREFIX" \
+        >> "$LOG_FILE" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$PID_FILE"
+    log_msg "已启动 daemon pid=$pid prefix=$PREFIX"
+
+    local i=0
+    while [ "$i" -lt 40 ]; do
+        if [ -S "$SOCKET" ] && check_process "$pid"; then
+            log_msg "socket 就绪：$SOCKET"
+            return 0
+        fi
+        check_process "$pid" || break
+        sleep 0.25
+        i=$((i + 1))
+    done
+    log_msg "ERROR: 启动超时（socket 未就绪）"
+    echo "$APPNAME: 守护进程启动失败，请查看 $LOG_FILE" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    return 1
+}
+
+stop_process() {
+    local pid
+    if ! pid="$(running_pid)"; then
+        rm -f "$SOCKET" 2>/dev/null
+        return 0
+    fi
+    log_msg "停止 pid $pid"
+    kill -TERM "$pid" 2>/dev/null
+    local count=0
+    while check_process "$pid" && [ "$count" -lt 15 ]; do
+        sleep 1
+        count=$((count + 1))
+    done
+    if check_process "$pid"; then
+        log_msg "强杀 pid $pid"
+        kill -KILL "$pid" 2>/dev/null
+        sleep 1
+    fi
+    rm -f "$PID_FILE"
+    rm -f "$SOCKET" 2>/dev/null
+    local stray
+    for stray in $(leftover_pids); do
+        log_msg "停止未跟踪的守护进程 $stray"
+        kill -TERM "$stray" 2>/dev/null
+    done
+    log_msg "已停止"
+    return 0
+}
+
+case "${1:-}" in
+start)
+    start_process || exit 1
+    exit 0
+    ;;
+stop)
+    stop_process || exit 1
+    exit 0
+    ;;
+status)
+    if status; then
+        exit 0
+    fi
+    exit 3
+    ;;
+*)
+    exit 1
+    ;;
+esac

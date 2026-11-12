@@ -1,0 +1,18 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+#
+# upgrade_init —— 升级前备份用户配置（升级会替换 target 下的文件）。
+set -u
+
+APPNAME="sriov-vfctl"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APPDEST="${TRIM_APPDEST:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PKGETC="${TRIM_PKGETC:-${APPDEST}/etc}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+
+mkdir -p "$PKGVAR" 2>/dev/null
+if [ -f "$PKGETC/config.json" ]; then
+    cp -f "$PKGETC/config.json" "$PKGVAR/config.backup.json" 2>/dev/null
+fi
+exit 0

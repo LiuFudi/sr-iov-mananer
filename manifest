@@ -1,0 +1,17 @@
+appname               = sriov-vfctl
+version               = 1.1.7
+display_name          = SR-IOV 管理
+display_name_en       = SR-IOV Manager
+desc                  = 本应用完全免费、无任何付费内容；界面内的打赏入口纯属自愿、不影响任何功能，与飞牛官方无关。SR-IOV 管理是一款面向飞牛 fnOS 的 Intel 核显虚拟功能管理工具，英文名为 SR-IOV Manager。它可查看 i915 DKMS 驱动与 SR-IOV 就绪状态，一键调整 VF 数量并持久化开机配置，检查 VF 的驱动绑定、IOMMU 分组和虚拟机占用，并提供诊断修复与命令行工具。<br /><br /><strong>适用场景</strong><br />在飞牛 fnOS NAS 上运行需要 Intel 核显直通虚拟机的场景。<br /><br /><strong>注意</strong><br />· 使用前需安装与当前内核匹配的 i915-sriov-dkms；<br />· 本应用需要 <code>root</code> 权限，仅建议自用，未提交官方应用中心；<br />· 绝不能把 PF（00:02.0）直通给虚拟机，只能直通 VF；<br />· VF 正被运行中的虚拟机占用时，改数量会被拒绝，请先关闭对应虚拟机。<br /><br />本应用与 Intel、飞牛官方均无隶属关系。开源地址：https://github.com/LiuFudi （GNU GPL-3.0-or-later）
+changelog             = 1.1.7：英文名统一为 SR-IOV Manager，中文名保持 SR-IOV 管理；新增英文 README 并同步版本信息。
+platform              = x86
+source                = thirdparty
+maintainer            = LiuFudi
+maintainer_url        = https://github.com/LiuFudi
+distributor           = LiuFudi
+distributor_url       = https://github.com/LiuFudi
+desktop_uidir         = ui
+desktop_applaunchname = sriov-vfctl.Application
+ctl_stop              = true
+checkport             = false
+os_min_version        = 1.2.0800

@@ -1,0 +1,22 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+#
+# install_init —— 安装文件写入前的检查。
+set -u
+
+APPNAME="sriov-vfctl"
+PYTHON="$(command -v python3 || echo /usr/bin/python3)"
+fail() {
+    echo "$APPNAME: $1" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+}
+
+[ -x "$PYTHON" ] || fail "需要 python3，但系统中没有"
+
+# 核显必须存在（这是本应用的唯一适用对象）
+if [ ! -d /sys/bus/pci/devices/0000:00:02.0 ]; then
+    fail "没有检测到 Intel 核显（00:02.0），本应用无法使用"
+fi
+echo "$APPNAME: 安装前检查通过" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+exit 0
